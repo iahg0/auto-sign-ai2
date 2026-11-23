@@ -26,7 +26,10 @@
     genericRetryMs: 15 * 60 * 1000,
     cloudflareRetryMs: 5 * 60 * 1000,
     initialDelayMs: 2500,
-    tickMs: 60 * 1000,
+    minimumTimerDelayMs: 250,
+    maximumTimerDelayMs: 2147000000,
+    bootRetryDelayMs: 5000,
+    bootRetryLimit: 12,
     requestTimeoutMs: 30 * 1000,
     lockMs: 2 * 60 * 1000,
   });
@@ -57,9 +60,10 @@
   };
 
   let running = false;
-  let tickTimer = null;
+  let checkTimer = null;
   let toastTimer = null;
   let loginNoticeShown = false;
+  let bootRetryCount = 0;
 
   function pageWindow() {
     return typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
@@ -338,6 +342,7 @@
         );
 
       if (isLoginProblem) {
+        setNextAttemptAt(Date.now() + CONFIG.genericRetryMs);
         showToast('登录状态已失效，请重新登录后刷新页面。', 'info');
       } else if (isCloudflareProblem) {
         setNextAttemptAt(Date.now() + CONFIG.cloudflareRetryMs);
@@ -385,6 +390,7 @@
     storage.set(KEYS.lastMessage, '');
     storage.set(KEYS.lockAt, 0);
     showToast('本地冷却记录已重置，下一次检查将立即执行。', 'info');
+    scheduleNextCheck();
   }
 
   function registerMenuCommands() {
@@ -393,7 +399,7 @@
     }
 
     GM_registerMenuCommand('每日福袋：立即领取', () => {
-      void claimDailyBonus({ manual: true });
+      void manualClaim();
     });
     GM_registerMenuCommand('每日福袋：查看状态', showStatus);
     GM_registerMenuCommand('每日福袋：重置本地冷却', resetLocalSchedule);
@@ -401,6 +407,51 @@
 
   function isDirectClaimPage() {
     return window.location.pathname.startsWith('/membersshop/buy-use/19');
+  }
+
+  function clearCheckTimer() {
+    if (checkTimer !== null) {
+      window.clearTimeout(checkTimer);
+      checkTimer = null;
+    }
+  }
+
+  function scheduleNextCheck(options = {}) {
+    clearCheckTimer();
+
+    if (isDirectClaimPage() || running) {
+      return;
+    }
+
+    if (!getIps()) {
+      if (bootRetryCount < CONFIG.bootRetryLimit) {
+        bootRetryCount += 1;
+        checkTimer = window.setTimeout(() => {
+          checkTimer = null;
+          scheduleNextCheck();
+        }, CONFIG.bootRetryDelayMs);
+      }
+      return;
+    }
+
+    bootRetryCount = 0;
+
+    if (!isLoggedIn()) {
+      return;
+    }
+
+    const nextAt = cooldownUntil();
+    const needsInitialDelay = options.initial === true && !nextAt;
+    const delay = nextAt
+      ? Math.max(nextAt - Date.now() + 500, CONFIG.minimumTimerDelayMs)
+      : needsInitialDelay
+        ? CONFIG.initialDelayMs
+        : CONFIG.minimumTimerDelayMs;
+
+    checkTimer = window.setTimeout(() => {
+      checkTimer = null;
+      void scheduledCheck();
+    }, Math.min(delay, CONFIG.maximumTimerDelayMs));
   }
 
   async function scheduledCheck() {
@@ -411,29 +462,22 @@
       return;
     }
     if (Date.now() < cooldownUntil()) {
+      scheduleNextCheck();
       return;
     }
     await claimDailyBonus();
+    scheduleNextCheck();
   }
 
-  function startScheduler() {
-    if (isDirectClaimPage()) {
-      return;
-    }
-
-    window.setTimeout(() => {
-      void scheduledCheck();
-    }, CONFIG.initialDelayMs);
-
-    tickTimer = window.setInterval(() => {
-      void scheduledCheck();
-    }, CONFIG.tickMs);
+  async function manualClaim() {
+    await claimDailyBonus({ manual: true });
+    scheduleNextCheck();
   }
 
   function exposeDebugApi() {
     try {
       pageWindow().__AI2_DAILY_BONUS__ = Object.freeze({
-        claim: () => claimDailyBonus({ manual: true }),
+        claim: () => manualClaim(),
         status: () => ({
           loggedIn: isLoggedIn(),
           nextAt: cooldownUntil(),
@@ -450,12 +494,19 @@
 
   registerMenuCommands();
   exposeDebugApi();
-  startScheduler();
+  scheduleNextCheck({ initial: true });
 
   window.addEventListener('pagehide', () => {
-    if (tickTimer) {
-      window.clearInterval(tickTimer);
-      tickTimer = null;
+    clearCheckTimer();
+  });
+
+  window.addEventListener('pageshow', () => {
+    scheduleNextCheck();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      scheduleNextCheck();
     }
   });
 })();
