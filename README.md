@@ -19,6 +19,16 @@
 
 Tampermonkey 的菜单中也可以手动触发领取或查看下次检查时间。
 
+## 更新地址
+
+在 Tampermonkey 脚本设置的“下载 URL”中填写：
+
+```text
+https://raw.githubusercontent.com/iahg0/auto-sign-ai2/main/ai2-daily-bonus.user.js
+```
+
+勾选“检查更新”并保存。每次发布新版本时必须递增脚本头部的 `@version`，否则 Tampermonkey 不会识别为可更新版本。
+
 ## 说明
 
 - 脚本不绕过 Cloudflare，也不保存账号密码。Cloudflare 首次验证仍由浏览器完成。

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         御爱同萌每日暖心福袋自动领取
 // @namespace    https://www.ai2.moe/
-// @version      1.0.0
+// @version      1.1.0
 // @description  在已登录且通过 Cloudflare 验证的浏览器会话中，自动领取 ai2.moe 的每日暖心福袋。
 // @author       Codex
 // @match        https://www.ai2.moe/*
