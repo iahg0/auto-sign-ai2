@@ -19,6 +19,8 @@
 
 Tampermonkey 的菜单中也可以手动触发领取或查看下次检查时间。
 
+不要在冷却期间手动打开 `/membersshop/buy-use/19-.../` 页面。这个地址会执行购买请求，服务器会返回 `MEMBERSSHOP/1` 和剩余等待秒数；这是站点冷却提示，不是 Cloudflare 拦截。
+
 ## 更新地址
 
 在 Tampermonkey 脚本设置的“下载 URL”中填写：

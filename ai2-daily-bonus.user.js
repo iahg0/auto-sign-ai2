@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         御爱同萌每日暖心福袋自动领取
 // @namespace    https://www.ai2.moe/
-// @version      1.1.0
+// @version      1.1.1
 // @description  在已登录且通过 Cloudflare 验证的浏览器会话中，自动领取 ai2.moe 的每日暖心福袋。
 // @author       Codex
 // @match        https://www.ai2.moe/*
@@ -64,6 +64,7 @@
   let toastTimer = null;
   let loginNoticeShown = false;
   let bootRetryCount = 0;
+  let pageCooldownSynced = false;
 
   function pageWindow() {
     return typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
@@ -101,6 +102,29 @@
 
   function setNextAttemptAt(timestamp) {
     storage.set(KEYS.nextAt, Math.round(timestamp));
+  }
+
+  function extractServerWaitMs(value) {
+    const text = stripMarkup(value);
+    const match = text.match(/(?:等待|等候)\s*([\d,]+)\s*秒/i);
+    if (!match) {
+      return 0;
+    }
+
+    const seconds = Number(match[1].replaceAll(',', ''));
+    return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
+  }
+
+  function syncCooldownFromPage() {
+    if (pageCooldownSynced || !isDirectClaimPage() || !document.body) {
+      return;
+    }
+
+    const waitMs = extractServerWaitMs(document.body.innerText || document.body.textContent);
+    if (waitMs) {
+      setNextAttemptAt(Date.now() + waitMs + CONFIG.cooldownBufferMs);
+      pageCooldownSynced = true;
+    }
   }
 
   function formatDateTime(timestamp) {
@@ -337,7 +361,7 @@
         /cloudflare|challenge|cf-mitigated|just a moment|安全检查|验证浏览器/i.test(text) ||
         (xhr?.status === 403 && !isLoginProblem);
       const isCooldown =
-        /冷却|还没到|未到|稍后|已经领取|已经购买|最近购买|才能再次领取|等待\s*\d+\s*(?:小时|分钟)|\d+\s*(?:小时|分钟).*(?:领取|购买)|too soon|cooldown|recently/i.test(
+        /冷却|还没到|未到|稍后|已经领取|已经购买|最近购买|才能再次(?:领取|购买)|等待\s*[\d,]+\s*(?:秒|分钟|小时)|\d+\s*(?:小时|分钟).*(?:领取|购买)|too soon|cooldown|recently/i.test(
           text,
         );
 
@@ -348,7 +372,10 @@
         setNextAttemptAt(Date.now() + CONFIG.cloudflareRetryMs);
         showToast('Cloudflare 会话需要重新验证，请刷新页面后再试。', 'error');
       } else if (isCooldown) {
-        setNextAttemptAt(Date.now() + CONFIG.cooldownRetryMs);
+        const serverWaitMs = extractServerWaitMs(text);
+        setNextAttemptAt(
+          Date.now() + (serverWaitMs || CONFIG.cooldownRetryMs) + CONFIG.cooldownBufferMs,
+        );
         showToast(`${text} 稍后会自动重试。`, 'info');
       } else {
         setNextAttemptAt(Date.now() + CONFIG.genericRetryMs);
@@ -363,6 +390,8 @@
   }
 
   function showStatus() {
+    syncCooldownFromPage();
+
     if (!isLoggedIn()) {
       showToast('尚未登录，登录并刷新页面后会开始自动领取。', 'info');
       return;
@@ -381,7 +410,7 @@
       return;
     }
 
-    showToast('当前可以领取，脚本将在一分钟内自动检查。', 'info');
+    showToast('当前可以领取，脚本会自动安排下一次检查。', 'info');
   }
 
   function resetLocalSchedule() {
@@ -470,6 +499,19 @@
   }
 
   async function manualClaim() {
+    if (isDirectClaimPage()) {
+      syncCooldownFromPage();
+      showStatus();
+      return;
+    }
+
+    const nextAt = cooldownUntil();
+    if (nextAt > Date.now()) {
+      showToast(`本地冷却中，下次可领取：${formatDateTime(nextAt)}。`, 'info', 6000);
+      scheduleNextCheck();
+      return;
+    }
+
     await claimDailyBonus({ manual: true });
     scheduleNextCheck();
   }
@@ -494,6 +536,7 @@
 
   registerMenuCommands();
   exposeDebugApi();
+  syncCooldownFromPage();
   scheduleNextCheck({ initial: true });
 
   window.addEventListener('pagehide', () => {
